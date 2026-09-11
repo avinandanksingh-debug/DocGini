@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import json
 import shutil
 from datetime import datetime
 import tkinter as tk
@@ -92,6 +93,31 @@ def get_resource_path(relative_path: str) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
 
+def get_config_file_path() -> str:
+    """Returns path to config.json. Supports portable mode and %APPDATA%."""
+    # Check if a config.json is present in the app's directory (portable mode)
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+    else:
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+
+    local_config = os.path.join(exe_dir, "config.json")
+    if os.path.exists(local_config):
+        return local_config
+
+    # Default location in %APPDATA%\DocGini\config.json
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        config_dir = os.path.join(appdata, "DocGini")
+        try:
+            os.makedirs(config_dir, exist_ok=True)
+            return os.path.join(config_dir, "config.json")
+        except Exception:
+            pass
+
+    return local_config
+
+
 class DocGeneratorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -109,6 +135,12 @@ class DocGeneratorApp:
 
         # Build UI layout
         self.build_ui()
+
+        # Load saved settings & paths from previous session
+        self.load_settings()
+
+        # Auto-save settings on close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_icon(self):
         """Load 3D rounded app icon if available."""
@@ -312,6 +344,31 @@ class DocGeneratorApp:
         if selected:
             self.folder_path.set(selected)
             self.preview_names(silent=True)
+            self.save_settings()
+
+    def apply_template(self, selected: str, auto_adjust_pattern: bool = True):
+        self.template_path.set(selected)
+        filename = os.path.basename(selected)
+        ext = os.path.splitext(filename)[1].lower()
+
+        # Attempt to extract date from template name
+        extracted = extract_date_from_name(filename)
+        self.extracted_template_date = extracted
+
+        if extracted:
+            self.template_info_var.set(f"Selected: {filename}  |  Extracted Date: {extracted}")
+            self.date_hint_var.set(f"(Blank = will use template date: {extracted})")
+        else:
+            self.template_info_var.set(f"Selected: {filename}  |  (No date pattern detected in template name)")
+            self.date_hint_var.set("(Optional: specify custom date)")
+
+        # If auto_adjust_pattern is True, auto-match the template extension in active pattern
+        if auto_adjust_pattern and ext in [".doc", ".docx"]:
+            current_pat = self.pattern_var.get().strip()
+            if ext == ".doc" and current_pat.endswith(".docx"):
+                self.pattern_var.set(current_pat[:-1])
+            elif ext == ".docx" and current_pat.endswith(".doc"):
+                self.pattern_var.set(current_pat + "x")
 
     def browse_template(self):
         selected = filedialog.askopenfilename(
@@ -324,30 +381,9 @@ class DocGeneratorApp:
             ]
         )
         if selected:
-            self.template_path.set(selected)
-            filename = os.path.basename(selected)
-            ext = os.path.splitext(filename)[1].lower()
-
-            # Attempt to extract date from template name
-            extracted = extract_date_from_name(filename)
-            self.extracted_template_date = extracted
-
-            if extracted:
-                self.template_info_var.set(f"Selected: {filename}  |  Extracted Date: {extracted}")
-                self.date_hint_var.set(f"(Blank = will use template date: {extracted})")
-            else:
-                self.template_info_var.set(f"Selected: {filename}  |  (No date pattern detected in template name)")
-                self.date_hint_var.set("(Optional: specify custom date)")
-
-            # If user hasn't typed a custom pattern, auto-match the template extension in active pattern
-            current_pat = self.pattern_var.get().strip()
-            if ext in [".doc", ".docx"]:
-                if ext == ".doc" and current_pat.endswith(".docx"):
-                    self.pattern_var.set(current_pat[:-1])
-                elif ext == ".docx" and current_pat.endswith(".doc"):
-                    self.pattern_var.set(current_pat + "x")
-
+            self.apply_template(selected, auto_adjust_pattern=True)
             self.preview_names(silent=True)
+            self.save_settings()
 
     def on_preset_change(self, event=None):
         val = self.preset_var.get()
@@ -362,6 +398,72 @@ class DocGeneratorApp:
                     val = val + "x"
             self.pattern_var.set(val)
         self.preview_names(silent=True)
+        self.save_settings()
+
+    def load_settings(self):
+        """Loads and restores remembered settings and file paths from config.json."""
+        config_file = get_config_file_path()
+        if not os.path.exists(config_file):
+            return
+
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Restore template first (if file exists)
+            saved_template = data.get("template_path", "")
+            if saved_template and os.path.isfile(saved_template):
+                self.apply_template(saved_template, auto_adjust_pattern=False)
+
+            # Restore pattern & preset
+            saved_preset = data.get("preset", "")
+            if saved_preset in self.presets:
+                self.preset_var.set(saved_preset)
+
+            saved_pattern = data.get("pattern", "")
+            if saved_pattern:
+                self.pattern_var.set(saved_pattern)
+
+            # Restore date string
+            saved_date = data.get("date_string", "")
+            if saved_date:
+                self.date_var.set(saved_date)
+
+            # Restore folder path (if folder exists)
+            saved_folder = data.get("folder_path", "")
+            if saved_folder and os.path.isdir(saved_folder):
+                self.folder_path.set(saved_folder)
+                self.preview_names(silent=True)
+
+            # Restore window size/position
+            saved_geom = data.get("geometry", "")
+            if saved_geom:
+                self.root.geometry(saved_geom)
+
+        except Exception:
+            pass
+
+    def save_settings(self):
+        """Saves current paths, pattern, date, and geometry to config.json."""
+        config_file = get_config_file_path()
+        try:
+            data = {
+                "folder_path": self.folder_path.get().strip(),
+                "template_path": self.template_path.get().strip(),
+                "date_string": self.date_var.get().strip(),
+                "preset": self.preset_var.get(),
+                "pattern": self.pattern_var.get().strip(),
+                "geometry": self.root.geometry(),
+            }
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def on_close(self):
+        """Handles window closing event."""
+        self.save_settings()
+        self.root.destroy()
 
     def get_audio_files(self, folder: str):
         if not folder or not os.path.isdir(folder):
@@ -518,6 +620,8 @@ class DocGeneratorApp:
         summary_msg = f"Done! Created: {created_count} file(s) | Skipped: {skipped_count} file(s) | Errors: {error_count}"
         self.log_text.insert(tk.END, summary_msg + "\n", "title")
         self.log_text.see(tk.END)
+
+        self.save_settings()
 
         if error_count == 0:
             messagebox.showinfo("Success", f"Document generation complete!\n\nCreated: {created_count}\nSkipped: {skipped_count}")

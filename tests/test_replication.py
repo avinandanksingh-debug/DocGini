@@ -97,6 +97,21 @@ def test_replication_and_naming():
                 assert content == b"FAKE_DOC_HEADER_AND_TEMPLATE_CONTENT_HERE"
         print("[PASS] Documents replicated with exact binary fidelity.")
 
+        # Test settings persistence
+        app.folder_path.set(audio_folder)
+        app.template_path.set(template_path)
+        app.date_var.set("09112026")
+        app.pattern_var.set("{base}_ _{date}_custom.doc")
+        app.save_settings()
+
+        # Create new app instance and test loading
+        app2 = DocGeneratorApp(root)
+        assert app2.folder_path.get() == audio_folder, f"Expected {audio_folder}, got {app2.folder_path.get()}"
+        assert app2.template_path.get() == template_path, f"Expected {template_path}, got {app2.template_path.get()}"
+        assert app2.date_var.get() == "09112026", f"Expected 09112026, got {app2.date_var.get()}"
+        assert app2.pattern_var.get() == "{base}_ _{date}_custom.doc", f"Expected custom pattern, got {app2.pattern_var.get()}"
+        print("[PASS] Settings persistence (save and load) verified.")
+
         root.destroy()
 
 if __name__ == "__main__":
