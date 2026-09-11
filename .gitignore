@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# System & Office temporary files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+~$*
+
+# Environment
+.venv/
+env/
+venv/
